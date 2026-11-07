@@ -187,7 +187,7 @@ function renderSettings() {
 
   const ab = document.createElement('div');
   ab.className = 'sgroup';
-  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.0<br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
+  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.1<br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
     'Vídeos exportados vão para <b>Filmes/VozELegenda</b> na galeria.</div>';
   box.appendChild(ab);
   refreshStorage();
@@ -622,8 +622,8 @@ const Browser = (() => {
 /* =====================================================================
    Mods
    ===================================================================== */
-const KIND_LABEL = { voice: 'Pacote de voz', studio: 'Pacote de estúdio', clips: 'Clipes', other: 'Mod' };
-const KIND_ICON = { voice: '🎙️', studio: '🎬', clips: '🎞️', other: '📦' };
+const KIND_LABEL = { dub: 'Pacote de dublagem', voice: 'Pacote de voz', studio: 'Pacote de estúdio', clips: 'Clipes', other: 'Mod' };
+const KIND_ICON = { dub: '🎤', voice: '🎙️', studio: '🎬', clips: '🎞️', other: '📦' };
 let curMod = null;
 
 const getMods = () => Store.get('mods', []);
@@ -635,7 +635,9 @@ async function scanMod(dir) {
   const audio = files.filter((f) => AUDIO_RE.test(f.name)).length;
   const video = files.filter((f) => VIDEO_RE.test(f.name)).length;
   const studio = files.some((f) => /^(model|music_studio|screen|absolute_image)\./i.test(f.name));
-  const kind = studio ? 'studio' : audio ? 'voice' : video ? 'clips' : 'other';
+  // pacote de dublagem do Choicer Voicer: dub_video + _backing_track (instrumental) + uma fala por arquivo
+  const dub = files.some((f) => /^(dub_video|_backing_track)\./i.test(f.name));
+  const kind = dub ? 'dub' : studio ? 'studio' : audio ? 'voice' : video ? 'clips' : 'other';
   const icon = files.find((f) => /^(_icon|icon|_pack_filler_image)\.(png|jpe?g|webp)$/i.test(f.name));
   return { files, kind, audio, video, icon: icon ? icon.path : null, size: r.size || 0 };
 }
@@ -715,26 +717,69 @@ async function allModFiles(type) {
   return out;
 }
 
+/** Mostra um erro que fica na tela (o aviso rápido some antes de dar tempo de ler). */
+function showError(title, err) {
+  const msg = err && err.message ? err.message : String(err || '');
+  return dialog({ title, text: msg, buttons: [{ label: 'OK', value: true, kind: 'primary' }] });
+}
+
 async function addModZip() {
   if (!N.MediaLib) { toast('Importar mods funciona no aplicativo instalado.'); return; }
+  // se o Android fechar o app enquanto o seletor está aberto, o resultado volta em "appRestoredResult"
+  Store.set('pendingPick', { purpose: 'modzip', at: Date.now() });
   let r;
-  try { r = await N.MediaLib.pickDocument({ types: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], multiple: false }); }
-  catch (e) { toast('Não consegui abrir o seletor: ' + (e.message || e)); return; }
+  try {
+    // sem filtro de tipo: muitos aparelhos classificam .zip de formas diferentes e escondem o arquivo
+    r = await N.MediaLib.pickDocument({ types: ['*/*'], multiple: false });
+  } catch (e) {
+    Store.del('pendingPick');
+    await showError('Não consegui abrir o seletor de arquivos', e);
+    return;
+  }
+  Store.del('pendingPick');
   const f = r && r.files && r.files[0];
-  if (!f) return;
+  if (f) await importZipFile(f);
+}
+
+async function importZipFile(f) {
   const base = f.name.replace(/\.zip$/i, '');
+  if (!/\.zip$/i.test(f.name)) {
+    if (!(await askConfirm('Esse arquivo não termina em .zip', '“' + f.name + '” pode não ser um pacote de mod. Tentar importar mesmo assim?', 'Tentar'))) return;
+  }
   const name = await askText('Nome do mod', base);
   if (!name) return;
-  showBusy('Importando mod…');
+  showBusy('Importando mod… (pode levar um tempo em pacotes grandes)');
+  let u = null;
   try {
-    const u = await N.MediaLib.unzip({ uri: f.uri, name });
-    if (!u.files) { toast('Esse zip está vazio.'); try { await N.MediaLib.remove({ path: u.path }); } catch (e) { /* ignora */ } return; }
+    u = await N.MediaLib.unzip({ uri: f.uri, name });
+    if (!u.files) {
+      try { await N.MediaLib.remove({ path: u.path }); } catch (e) { /* ignora */ }
+      hideBusy();
+      await showError('Zip vazio', 'Não encontrei arquivos dentro de “' + f.name + '”.');
+      return;
+    }
     await registerMod(u.path, name);
     renderMods();
+    hideBusy();
     toast('Mod “' + name + '” importado (' + u.files + ' arquivos).');
   } catch (e) {
-    toast('Não consegui importar o zip: ' + (e.message || e));
-  } finally { hideBusy(); }
+    hideBusy();
+    if (u && u.path) { try { await N.MediaLib.remove({ path: u.path }); } catch (e2) { /* ignora */ } }
+    await showError('Não consegui importar “' + f.name + '”', e);
+  }
+}
+
+// retoma a importação se o app foi fechado pelo Android enquanto o seletor estava aberto
+if (N.App) {
+  N.App.addListener('appRestoredResult', async (ev) => {
+    try {
+      if (!ev || ev.pluginId !== 'MediaLib' || ev.methodName !== 'pickDocument') return;
+      const pend = Store.get('pendingPick', null);
+      Store.del('pendingPick');
+      const files = (ev.data && ev.data.files) || [];
+      if (ev.success && pend && pend.purpose === 'modzip' && files[0]) { setTab('mods'); await importZipFile(files[0]); }
+    } catch (e) { /* ignora */ }
+  });
 }
 
 async function addModFiles() {
@@ -935,6 +980,18 @@ function whenReady(el, ms) {
   });
 }
 
+/** Texto curto explicando por que um vídeo/áudio não abriu (ajuda a achar o problema). */
+async function mediaDiag(el, path) {
+  const names = { 1: 'cancelado', 2: 'erro de leitura', 3: 'erro ao decodificar', 4: 'formato não suportado' };
+  const code = el.error ? el.error.code : 0;
+  let srv = '';
+  try {
+    const r = await fetch(N.fileUrl(path), { headers: { Range: 'bytes=0-1' } });
+    srv = 'arquivo ' + r.status + (r.headers.get('content-range') ? ' (' + r.headers.get('content-range') + ')' : '');
+  } catch (e) { srv = 'arquivo inacessível (' + (e.message || e) + ')'; }
+  return (names[code] || (code ? 'erro ' + code : 'sem resposta')) + ' · ' + srv + ' · ' + String(path).split('/').pop();
+}
+
 async function loadMedia() {
   const warn = $('#ed-warn');
   warn.hidden = true;
@@ -942,11 +999,13 @@ async function loadMedia() {
   voice.src = N.fileUrl(cur.voice.path);
   const rs = await Promise.allSettled([whenReady(bg), whenReady(voice)]);
   const miss = [];
-  if (rs[0].status === 'rejected') miss.push('o vídeo de fundo');
-  if (rs[1].status === 'rejected') miss.push('o áudio da voz');
+  const diag = [];
+  if (rs[0].status === 'rejected') { miss.push('o vídeo de fundo'); diag.push('Fundo: ' + await mediaDiag(bg, cur.bg.path)); }
+  if (rs[1].status === 'rejected') { miss.push('o áudio da voz'); diag.push('Voz: ' + await mediaDiag(voice, cur.voice.path)); }
   if (miss.length) {
     warn.hidden = false;
-    warn.textContent = 'Não consegui abrir ' + miss.join(' e ') + '. Use “Trocar fundo” / “Trocar voz” nos ajustes abaixo.';
+    warn.innerHTML = 'Não consegui abrir ' + miss.join(' e ') + '. Use “Trocar fundo” / “Trocar voz” nos ajustes abaixo.' +
+      '<br><small>' + diag.map(esc).join('<br>') + '</small>';
   }
   initAudio();
   applyVolumes();

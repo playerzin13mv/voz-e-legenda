@@ -13,11 +13,12 @@ const MediaLib = isNative ? plugin('MediaLib') : null;
 const Share = isNative ? plugin('Share') : null;
 const App = isNative ? plugin('App') : null;
 
-/** Caminho local (do app) -> endereço que o <video>/<audio> consegue abrir. */
+/** Caminho local (do app) -> endereço que o <video>/<audio> consegue abrir.
+ *  No Android, quem entrega o arquivo é o MediaWebViewClient (com Range e CORS). */
 function fileUrl(path) {
   if (!path) return '';
   if (/^(blob:|https?:|data:)/.test(path)) return path;
-  if (isNative) return Cap.convertFileSrc('file://' + path);
+  if (isNative) return '/_vlmedia_' + path.split('/').map(encodeURIComponent).join('/');
   return path;
 }
 

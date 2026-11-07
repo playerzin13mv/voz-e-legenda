@@ -1,6 +1,6 @@
 {
   "name": "voz-e-legenda",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Junta vídeo de fundo, voz e legendas e exporta em .mp4",
   "dependencies": {

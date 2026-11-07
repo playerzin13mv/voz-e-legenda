@@ -9,5 +9,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(MediaLibPlugin.class);
         super.onCreate(savedInstanceState);
+        // servidor de arquivos do app (vídeos/áudios com suporte a "pular" e CORS)
+        getBridge().getWebView().setWebViewClient(new MediaWebViewClient(getBridge()));
     }
 }

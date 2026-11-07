@@ -1,10 +1,10 @@
-# Voz e Legenda 2.0
+# Voz e Legenda 2.1
 
 App Android (vertical) que junta **vídeo de fundo + áudio da voz + legendas** e exporta em **.mp4**.
 
 ## O que tem
 - **Vídeos**: lista dos seus projetos (miniatura, duração, nº de legendas). Salvos sozinhos; se o app fechar, você volta onde estava.
-- **Mods**: importe pacotes `.zip` do Choicer Voicer (pacotes de voz e de estúdio) ou arquivos soltos. Toque num clipe para ouvir e use como voz ou como fundo num novo vídeo.
+- **Mods**: importe pacotes `.zip` do Choicer Voicer (pacotes de voz, de estúdio e de dublagem) ou arquivos soltos. Toque num clipe para ouvir e use como voz ou como fundo num novo vídeo.
 - **Ajustes**: formato padrão, legendas (tamanho, posição, cor, caixa), qualidade (540p/720p/1080p), FPS, volumes, limpeza de espaço.
 - **Escolher arquivos dentro do app**: navegador com álbuns da galeria (Recentes, Todos, Download, Camera…), miniaturas, e “Outros locais…” para o seletor do Android.
 - **Editor**: legendas em partes (manual ou “colar texto e sincronizar”), legendas só no editor ou também no vídeo exportado, formato vertical/horizontal.
@@ -24,6 +24,7 @@ O APK usa uma chave de assinatura fixa (`native/debug.keystore`), então as pró
 ## Estrutura
 - `www/` — o app (HTML/CSS/JS).
 - `native/MediaLibPlugin.java` — plugin Android: galeria por álbuns, copiar arquivos, descompactar mods, gravar e salvar vídeo.
+- `native/MediaWebViewClient.java` + `RangeSupport.java` — entregam os vídeos/áudios do app ao player (com “pular” e CORS).
 - `native/patch_manifest.py` — permissões e trava na vertical.
 - `.github/workflows/build-apk.yml` — compila o APK.
 - `assets/` — ícone.
