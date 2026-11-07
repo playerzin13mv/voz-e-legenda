@@ -1,4 +1,4 @@
-# Voz e Legenda 2.1
+# Voz e Legenda 2.2
 
 App Android (vertical) que junta **vídeo de fundo + áudio da voz + legendas** e exporta em **.mp4**.
 

@@ -187,7 +187,7 @@ function renderSettings() {
 
   const ab = document.createElement('div');
   ab.className = 'sgroup';
-  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.1<br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
+  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.2<br><small>' + esc(N.status()) + '</small><br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
     'Vídeos exportados vão para <b>Filmes/VozELegenda</b> na galeria.</div>';
   box.appendChild(ab);
   refreshStorage();
@@ -373,7 +373,10 @@ const Browser = (() => {
   }
 
   function open(opts) {
-    if (!N.MediaLib) return webPick(opts);
+    if (!N.MediaLib) {
+      if (N.isNative) { showError('O plugin de arquivos não carregou', N.status()); return Promise.resolve(null); }
+      return webPick(opts);
+    }
     return new Promise((resolve) => {
       st = {
         opts, resolve, type: opts.types[0], albums: [], albumId: '__recent', files: [], total: 0,
@@ -723,8 +726,13 @@ function showError(title, err) {
   return dialog({ title, text: msg, buttons: [{ label: 'OK', value: true, kind: 'primary' }] });
 }
 
+function noPlugin() {
+  if (N.isNative) showError('O plugin de arquivos não carregou', N.status());
+  else toast('Importar mods funciona no aplicativo instalado.');
+}
+
 async function addModZip() {
-  if (!N.MediaLib) { toast('Importar mods funciona no aplicativo instalado.'); return; }
+  if (!N.MediaLib) { noPlugin(); return; }
   // se o Android fechar o app enquanto o seletor está aberto, o resultado volta em "appRestoredResult"
   Store.set('pendingPick', { purpose: 'modzip', at: Date.now() });
   let r;
@@ -783,7 +791,7 @@ if (N.App) {
 }
 
 async function addModFiles() {
-  if (!N.MediaLib) { toast('Importar mods funciona no aplicativo instalado.'); return; }
+  if (!N.MediaLib) { noPlugin(); return; }
   const name = await askText('Nome do mod', 'Meu mod');
   if (!name) return;
   const sub = 'mods/' + safeName(name);

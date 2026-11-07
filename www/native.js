@@ -3,10 +3,34 @@
 'use strict';
 
 const Cap = window.Capacitor;
-const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
 
+function safe(fn, fallback) { try { return fn(); } catch (e) { return fallback; } }
+
+// Detecta o Android de mais de um jeito (o "androidBridge" é criado pelo Capacitor no aplicativo instalado)
+const platform = safe(() => (Cap && typeof Cap.getPlatform === 'function' ? Cap.getPlatform() : 'web'), 'web');
+const isNative =
+  !!safe(() => Cap && typeof Cap.isNativePlatform === 'function' && Cap.isNativePlatform(), false) ||
+  platform === 'android' ||
+  !!window.androidBridge;
+
+/** Acha o plugin nativo: registerPlugin -> Capacitor.Plugins -> chamada direta à ponte. */
 function plugin(name) {
-  try { return Cap.registerPlugin(name); } catch (e) { return null; }
+  if (!Cap) return null;
+  const viaRegister = safe(() => (typeof Cap.registerPlugin === 'function' ? Cap.registerPlugin(name) : null), null);
+  if (viaRegister) return viaRegister;
+  if (Cap.Plugins && Cap.Plugins[name]) return Cap.Plugins[name];
+  if (typeof Cap.nativePromise === 'function' && typeof Proxy === 'function') {
+    return new Proxy({}, {
+      get: (_, method) => {
+        if (method === 'addListener') {
+          return (ev, cb) => Promise.resolve(typeof Cap.addListener === 'function' ? Cap.addListener(name, ev, cb) : null);
+        }
+        if (method === 'then') return undefined;
+        return (opts) => Cap.nativePromise(name, String(method), opts || {});
+      },
+    });
+  }
+  return null;
 }
 
 const MediaLib = isNative ? plugin('MediaLib') : null;
@@ -22,5 +46,12 @@ function fileUrl(path) {
   return path;
 }
 
-window.Native = { isNative, MediaLib, Share, App, fileUrl, paths: { files: '', cache: '' } };
+/** Resumo para a tela de Ajustes (ajuda a saber se o plugin nativo carregou). */
+function status() {
+  return 'Plataforma: ' + (isNative ? 'Android (aplicativo)' : 'navegador') +
+    ' · Plugin de arquivos: ' + (MediaLib ? 'ok' : 'NÃO carregou') +
+    ' · Voltar/Compartilhar: ' + (App ? 'ok' : '—') + '/' + (Share ? 'ok' : '—');
+}
+
+window.Native = { isNative, MediaLib, Share, App, fileUrl, status, paths: { files: '', cache: '' } };
 })();

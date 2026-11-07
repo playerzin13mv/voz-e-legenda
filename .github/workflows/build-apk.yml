@@ -33,6 +33,17 @@ jobs:
           cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js www/vendor/ffmpeg/core/
           cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm www/vendor/ffmpeg/core/
 
+      - name: Copiar a biblioteca do Capacitor para dentro do app
+        run: |
+          if [ -f node_modules/@capacitor/core/dist/capacitor.js ]; then
+            cp node_modules/@capacitor/core/dist/capacitor.js www/capacitor.js
+          else
+            echo "capacitor.js não encontrado; conteúdo de dist:"
+            ls node_modules/@capacitor/core/dist
+            exit 1
+          fi
+          ls -la www/capacitor.js
+
       - name: Criar projeto Android
         run: npx cap add android
 
