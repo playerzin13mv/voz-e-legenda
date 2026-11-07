@@ -1,0 +1,68 @@
+name: Gerar APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Copiar ffmpeg.wasm (usado só se o celular não gravar mp4 direto)
+        run: |
+          mkdir -p www/vendor/ffmpeg/core
+          cp -r node_modules/@ffmpeg/ffmpeg/dist/umd/. www/vendor/ffmpeg/
+          cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.js www/vendor/ffmpeg/core/
+          cp node_modules/@ffmpeg/core/dist/umd/ffmpeg-core.wasm www/vendor/ffmpeg/core/
+
+      - name: Criar projeto Android
+        run: npx cap add android
+
+      - name: Gerar ícones do app
+        run: npx capacitor-assets generate --android
+
+      - name: Travar o app na vertical
+        run: perl -0pi -e 's/<activity/<activity android:screenOrientation="portrait"/' android/app/src/main/AndroidManifest.xml
+
+      - name: Sincronizar
+        run: npx cap sync android
+
+      - name: Compilar APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Guardar APK como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: voz-e-legenda-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publicar APK na aba Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk voz-e-legenda.apk
+          gh release delete apk-atual --yes --cleanup-tag || true
+          gh release create apk-atual voz-e-legenda.apk \
+            --title "APK mais recente" \
+            --notes "Baixe o voz-e-legenda.apk, abra no celular e instale."
