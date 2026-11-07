@@ -36,11 +36,21 @@ jobs:
       - name: Criar projeto Android
         run: npx cap add android
 
+      - name: Instalar o plugin nativo (galeria, mods, salvar vídeo)
+        run: |
+          cp native/MainActivity.java native/MediaLibPlugin.java android/app/src/main/java/com/vozelegenda/app/
+          python3 native/patch_manifest.py
+
+      - name: Número da versão
+        run: sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+
       - name: Gerar ícones do app
         run: npx capacitor-assets generate --android
 
-      - name: Travar o app na vertical
-        run: perl -0pi -e 's/<activity/<activity android:screenOrientation="portrait"/' android/app/src/main/AndroidManifest.xml
+      - name: Chave de assinatura fixa (permite atualizar o app sem desinstalar)
+        run: |
+          mkdir -p ~/.android
+          cp native/debug.keystore ~/.android/debug.keystore
 
       - name: Sincronizar
         run: npx cap sync android

@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Publica o projeto no seu GitHub. O GitHub gera o APK sozinho.
-# Uso:  bash publicar.sh [nome-do-repositorio]
+# Envia o projeto para o seu GitHub (cria o repositório na 1ª vez, atualiza nas outras).
+# O GitHub compila o APK sozinho.   Uso:  bash publicar.sh [nome-do-repositorio]
 set -e
 
 NOME="${1:-voz-e-legenda}"
@@ -19,13 +19,17 @@ git config user.email >/dev/null || git config user.email "$(gh api user -q .log
 [ -d .git ] || git init -b main
 git checkout -B main
 git add -A
-git commit -m "App Voz e Legenda" || true
+git commit -m "Voz e Legenda 2.0" || true
 
-# troque --public por --private se quiser o código privado
-gh repo create "$NOME" --public --source=. --remote=origin --push
+if git remote get-url origin >/dev/null 2>&1; then
+  echo "Repositório já existe: atualizando..."
+  git push -u origin main || git push -u origin main --force
+else
+  # troque --public por --private se quiser o código privado
+  gh repo create "$NOME" --public --source=. --remote=origin --push
+fi
 
 echo
-echo "Pronto! Agora o GitHub está compilando o APK (uns 5 a 10 minutos)."
-echo "Acompanhe:  gh run watch"
-echo "Quando terminar, baixe o APK em:  Releases > 'APK mais recente'"
-gh repo view --web 2>/dev/null || true
+echo "Pronto! O GitHub está compilando o APK (uns 5 a 10 minutos)."
+echo "Acompanhe com:  gh run watch"
+echo "Quando terminar, baixe em:  Releases > 'APK mais recente'"

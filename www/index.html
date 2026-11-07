@@ -6,68 +6,102 @@
 <meta name="theme-color" content="#14101f">
 <title>Voz e Legenda</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="home.css">
 </head>
 <body>
 
-<!-- ============ TELA 1: PREPARAR ============ -->
-<section id="screen-setup" class="screen active">
-  <header class="top">
-    <div class="logo">🎙️</div>
-    <h1>Voz e Legenda</h1>
-    <p class="sub">Junte um vídeo de fundo, a sua voz e legendas.</p>
-  </header>
+<!-- ============ INÍCIO (3 abas) ============ -->
+<section id="screen-home" class="screen active">
+
+  <div id="tab-videos" class="tab active">
+    <header class="top-l"><h1>Meus vídeos</h1><p class="sub">Seus projetos de vídeo com voz e legenda.</p></header>
+    <div id="list-videos" class="plist"></div>
+    <div id="empty-videos" class="empty">
+      <div class="big">🎬</div>
+      <p>Você ainda não tem vídeos.<br>Toque em <b>＋ Novo vídeo</b> para começar.</p>
+    </div>
+    <button id="fab-new" class="fab">＋ Novo vídeo</button>
+  </div>
+
+  <div id="tab-mods" class="tab">
+    <header class="top-l"><h1>Mods</h1><p class="sub">Pacotes do Choicer Voicer: vozes e estúdios.</p></header>
+    <div class="row wrap gap">
+      <button id="btn-mod-zip" class="btn primary">📦 Importar mod (.zip)</button>
+      <button id="btn-mod-files" class="btn">🎵 Arquivos soltos</button>
+    </div>
+    <div id="list-mods" class="plist"></div>
+    <div id="empty-mods" class="empty">
+      <div class="big">📦</div>
+      <p>Nenhum mod importado.<br>Importe um pacote <b>.zip</b> do Choicer Voicer (pasta com áudios) e use os clipes nos seus vídeos.</p>
+    </div>
+  </div>
+
+  <div id="tab-settings" class="tab">
+    <header class="top-l"><h1>Ajustes</h1></header>
+    <div id="settings-body"></div>
+  </div>
+
+  <nav class="tabbar">
+    <button data-tab="videos" class="on"><i>🎬</i><span>Vídeos</span></button>
+    <button data-tab="mods"><i>📦</i><span>Mods</span></button>
+    <button data-tab="settings"><i>⚙️</i><span>Ajustes</span></button>
+  </nav>
+</section>
+
+<!-- ============ NOVO PROJETO ============ -->
+<section id="screen-setup" class="screen">
+  <div class="bar">
+    <button class="icon-btn" data-back aria-label="Voltar">←</button>
+    <strong>Novo vídeo</strong>
+    <span style="width:44px"></span>
+  </div>
+
+  <div class="card">
+    <h2>Nome</h2>
+    <input id="su-name" class="text" type="text" maxlength="60" placeholder="Meu vídeo">
+  </div>
 
   <div class="card">
     <h2>1. Vídeo de fundo</h2>
     <p class="hint">Um vídeo só com os sons de fundo e tal.</p>
-    <label class="pick" id="pick-bg">
-      <input type="file" id="file-bg" accept="video/*" hidden>
-      <span class="pick-icon">🎬</span>
-      <span class="pick-text" id="pick-bg-text">Escolher vídeo</span>
-    </label>
+    <button class="pick" id="su-bg"><span class="pick-icon">🎬</span><span class="pick-text" id="su-bg-text">Escolher vídeo</span></button>
   </div>
 
   <div class="card">
     <h2>2. Áudio da voz</h2>
     <p class="hint">A gravação da voz que vai falar no vídeo.</p>
-    <label class="pick" id="pick-voice">
-      <input type="file" id="file-voice" accept="audio/*,video/*" hidden>
-      <span class="pick-icon">🎧</span>
-      <span class="pick-text" id="pick-voice-text">Escolher áudio</span>
-    </label>
+    <button class="pick" id="su-voice"><span class="pick-icon">🎧</span><span class="pick-text" id="su-voice-text">Escolher áudio</span></button>
   </div>
 
   <div class="card">
     <h2>3. Legendas</h2>
     <div class="radio-row">
-      <label class="radio disabled"><input type="radio" name="submode" value="auto" disabled> <span>Automática <em>(em breve)</em></span></label>
-      <label class="radio"><input type="radio" name="submode" value="manual" checked> <span>Manual</span></label>
+      <label class="radio disabled"><input type="radio" name="submode" disabled> <span>Automática <em>(em breve)</em></span></label>
+      <label class="radio"><input type="radio" name="submode" checked> <span>Manual</span></label>
     </div>
   </div>
 
   <div class="card">
     <h2>4. Formato do vídeo</h2>
-    <div class="chips" id="chips-format-setup">
+    <div class="chips" id="su-format">
       <button class="chip on" data-format="vertical">📱 Vertical 9:16</button>
       <button class="chip" data-format="horizontal">🖥️ Horizontal 16:9</button>
     </div>
   </div>
 
-  <button id="btn-continue" class="btn primary big" disabled>Continuar</button>
-  <p class="tiny center" id="setup-msg"></p>
+  <button id="su-create" class="btn primary big" disabled>Criar e abrir editor</button>
 </section>
 
-<!-- ============ TELA 2: EDITOR ============ -->
+<!-- ============ EDITOR ============ -->
 <section id="screen-editor" class="screen">
   <div class="bar">
-    <button id="btn-back" class="icon-btn" aria-label="Voltar">←</button>
-    <strong>Editor</strong>
-    <button id="btn-export" class="btn primary small">Exportar .mp4</button>
+    <button class="icon-btn" data-back aria-label="Voltar">←</button>
+    <input id="ed-name" class="text title" type="text" maxlength="60" aria-label="Nome do projeto">
+    <button id="btn-export" class="btn primary small">Exportar</button>
   </div>
+  <div id="ed-warn" class="warn" hidden></div>
 
-  <div class="stage">
-    <canvas id="canvas" width="720" height="1280"></canvas>
-  </div>
+  <div class="stage"><canvas id="canvas" width="720" height="1280"></canvas></div>
 
   <div class="player">
     <button id="btn-play" class="round">▶</button>
@@ -75,7 +109,6 @@
     <span id="time" class="time">0:00.0</span>
   </div>
 
-  <!-- sincronização rápida -->
   <div class="card">
     <h2>Legendas</h2>
     <div class="row wrap">
@@ -100,24 +133,56 @@
   </div>
 
   <div class="card">
-    <h2>Ajustes</h2>
-    <div class="toggle-row">
-      <span>Mostrar legendas no editor</span>
-      <label class="switch"><input type="checkbox" id="opt-editor" checked><i></i></label>
-    </div>
-    <div class="toggle-row">
-      <span>Legendas no vídeo exportado</span>
-      <label class="switch"><input type="checkbox" id="opt-burn" checked><i></i></label>
-    </div>
+    <h2>Ajustes do vídeo</h2>
+    <div class="toggle-row"><span>Mostrar legendas no editor</span>
+      <label class="switch"><input type="checkbox" id="opt-editor" checked><i></i></label></div>
+    <div class="toggle-row"><span>Legendas no vídeo exportado</span>
+      <label class="switch"><input type="checkbox" id="opt-burn" checked><i></i></label></div>
     <div class="slider-row"><span>Volume do fundo</span><input type="range" id="vol-bg" min="0" max="1" step="0.01" value="0.4"></div>
     <div class="slider-row"><span>Volume da voz</span><input type="range" id="vol-voice" min="0" max="1" step="0.01" value="1"></div>
-    <div class="chips" id="chips-format-editor">
+    <div class="chips" id="ed-format">
       <button class="chip on" data-format="vertical">📱 Vertical</button>
       <button class="chip" data-format="horizontal">🖥️ Horizontal</button>
+    </div>
+    <div class="row wrap" style="margin-top:10px">
+      <button id="btn-swap-bg" class="btn small">🎬 Trocar fundo</button>
+      <button id="btn-swap-voice" class="btn small">🎧 Trocar voz</button>
     </div>
   </div>
   <div style="height:24px"></div>
 </section>
+
+<!-- ============ DETALHE DO MOD ============ -->
+<section id="screen-mod" class="screen">
+  <div class="bar">
+    <button class="icon-btn" data-back aria-label="Voltar">←</button>
+    <strong id="mod-title" class="ellipsis">Mod</strong>
+    <span style="width:44px"></span>
+  </div>
+  <p class="hint" id="mod-sub"></p>
+  <div id="mod-files" class="mfiles"></div>
+  <p class="hint center" id="mod-empty" hidden>Nenhum áudio ou vídeo encontrado neste mod.</p>
+</section>
+
+<!-- ============ NAVEGADOR DE ARQUIVOS DO APP ============ -->
+<div id="browser" class="sheet" hidden>
+  <div class="bar">
+    <button id="br-close" class="icon-btn" aria-label="Fechar">✕</button>
+    <strong id="br-title" class="ellipsis">Escolher</strong>
+    <button id="br-ok" class="btn primary small" hidden>Usar</button>
+  </div>
+  <div id="br-types" class="segctl" hidden>
+    <button data-type="audio">🎧 Áudios</button>
+    <button data-type="video">🎬 Vídeos</button>
+  </div>
+  <div id="br-albums" class="albums"></div>
+  <div id="br-msg" class="br-msg" hidden></div>
+  <div id="br-grid" class="grid"></div>
+  <div class="br-foot">
+    <button id="br-more" class="btn small" hidden>Carregar mais</button>
+    <button id="br-other" class="btn small">📂 Outros locais…</button>
+  </div>
+</div>
 
 <!-- ============ EXPORTAÇÃO ============ -->
 <div id="overlay" class="overlay" hidden>
@@ -126,18 +191,35 @@
     <p class="hint" id="ov-msg">Mantenha o app aberto e a tela ligada.</p>
     <div class="progress"><div id="ov-bar"></div></div>
     <div id="ov-actions" class="col" hidden>
-      <button id="ov-share" class="btn primary">📤 Salvar / Compartilhar</button>
-      <button id="ov-docs" class="btn">📁 Salvar em Documentos</button>
+      <button id="ov-gallery" class="btn primary">💾 Salvar na galeria</button>
+      <button id="ov-share" class="btn">📤 Compartilhar</button>
       <button id="ov-close" class="btn">Fechar</button>
     </div>
     <button id="ov-cancel" class="btn small">Cancelar</button>
   </div>
 </div>
 
-<!-- elementos de mídia (ocultos) -->
+<!-- ============ OCUPADO / DIÁLOGO / AVISO ============ -->
+<div id="busy" class="overlay" hidden><div class="modal"><div class="spinner"></div><p id="busy-msg">Aguarde…</p></div></div>
+
+<div id="dialog" class="overlay" hidden>
+  <div class="modal left">
+    <h2 id="dlg-title"></h2>
+    <p class="hint" id="dlg-text" hidden></p>
+    <input id="dlg-input" class="text" type="text" hidden>
+    <div id="dlg-buttons" class="col"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- mídia oculta -->
 <video id="bg" playsinline loop preload="auto" style="display:none"></video>
 <audio id="voice" preload="auto" style="display:none"></audio>
+<audio id="preview" preload="none" style="display:none"></audio>
 
+<script src="native.js"></script>
+<script src="store.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
