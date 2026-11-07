@@ -38,7 +38,8 @@ jobs:
 
       - name: Instalar o plugin nativo (galeria, mods, salvar vídeo)
         run: |
-          cp native/MainActivity.java native/MediaLibPlugin.java android/app/src/main/java/com/vozelegenda/app/
+          cp native/*.java android/app/src/main/java/com/vozelegenda/app/
+          ls android/app/src/main/java/com/vozelegenda/app/
           python3 native/patch_manifest.py
 
       - name: Número da versão
