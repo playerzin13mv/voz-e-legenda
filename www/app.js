@@ -104,6 +104,7 @@ const DEFAULTS = {
   format: 'vertical', burn: true, showEditor: true, volBg: 0.4, volVoice: 1,
   subSize: 'media', subPos: 'baixo', subColor: '#ffffff', subBox: false,
   quality: 'media', fps: 30, keepAwake: true,
+  micLatency: 100, guide: true,
 };
 let S = Object.assign({}, DEFAULTS, Store.get('settings', {}));
 const saveSettings = () => Store.set('settings', S);
@@ -124,6 +125,9 @@ const SCHEMA = [
   { k: 'quality', t: 'select', l: 'Qualidade', o: [['baixa', 'Baixa (540p, menor)'], ['media', 'Média (720p)'], ['alta', 'Alta (1080p, maior)']] },
   { k: 'fps', t: 'select', l: 'Quadros por segundo', num: true, o: [[24, '24'], [30, '30']] },
   { k: 'keepAwake', t: 'toggle', l: 'Manter a tela ligada ao exportar' },
+  { h: 'Dublagem' },
+  { k: 'micLatency', t: 'select', l: 'Atraso do microfone (ajuste fino)', num: true, o: [[0, '0 ms (fio / sem atraso)'], [50, '50 ms'], [100, '100 ms (padrão)'], [150, '150 ms'], [200, '200 ms'], [300, '300 ms (Bluetooth)']] },
+  { k: 'guide', t: 'toggle', l: 'Ouvir o original enquanto grava' },
 ];
 
 function renderSettings() {
@@ -187,7 +191,7 @@ function renderSettings() {
 
   const ab = document.createElement('div');
   ab.className = 'sgroup';
-  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.2<br><small>' + esc(N.status()) + '</small><br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
+  ab.innerHTML = '<h3>Sobre</h3><div class="sinfo">Voz e Legenda 2.3<br><small>' + esc(N.status()) + '</small><br>Seus projetos ficam salvos no aparelho e continuam aí mesmo se o app fechar. ' +
     'Vídeos exportados vão para <b>Filmes/VozELegenda</b> na galeria.</div>';
   box.appendChild(ab);
   refreshStorage();
@@ -317,8 +321,18 @@ async function projectMenu(p) {
     saveProject(c); renderVideos(); toast('Projeto duplicado.');
   } else if (act === 'del') {
     if (await askConfirm('Apagar “' + p.name + '”?', 'As legendas deste projeto serão apagadas.', 'Apagar')) {
-      deleteProject(p.id); renderVideos(); removeUnusedMedia();
+      deleteProject(p.id); removeTakes(p); renderVideos(); removeUnusedMedia();
     }
+  }
+}
+
+/** apaga as gravações de dublagem de um projeto (menos as que outro projeto copiado ainda usa) */
+async function removeTakes(p) {
+  if (!N.MediaLib) return;
+  const inUse = new Set();
+  projIds().map(getProject).filter(Boolean).forEach((q) => (q.segs || []).forEach((sg) => { if (sg.take && sg.take.path) inUse.add(sg.take.path); }));
+  for (const sg of p.segs || []) {
+    if (sg.take && sg.take.path && !inUse.has(sg.take.path)) { try { await N.MediaLib.remove({ path: sg.take.path }); } catch (e) { /* ignora */ } }
   }
 }
 
@@ -823,6 +837,18 @@ async function openMod(m) {
   push('mod');
   let files = [];
   try { files = await modFiles(m); } catch (e) { toast('Não consegui ler o mod.'); }
+  const acts = $('#mod-actions');
+  acts.innerHTML = '';
+  if (m.kind === 'dub') {
+    const b = document.createElement('button');
+    b.className = 'btn primary small'; b.textContent = '🎤 Dublar este pacote';
+    b.addEventListener('click', () => { stopPreview(); createDubFromPack(m); });
+    acts.appendChild(b);
+  }
+  const bi = document.createElement('button');
+  bi.className = 'btn small'; bi.textContent = '🔍 Ver estrutura';
+  bi.addEventListener('click', () => inspectMod(m));
+  acts.appendChild(bi);
   const media = files.filter((f) => AUDIO_RE.test(f.name) || VIDEO_RE.test(f.name));
   $('#mod-empty').hidden = media.length > 0;
   media.forEach((f) => {
@@ -843,6 +869,178 @@ async function openMod(m) {
   });
 }
 
+
+/* ---------- pacote de dublagem do Choicer Voicer ---------- */
+const readText = async (path) => { const r = await fetch(N.fileUrl(path)); return r.text(); };
+function audioDur(path, ms) {
+  return new Promise((res) => {
+    const a = new Audio();
+    a.preload = 'metadata';
+    const done = (v) => { clearTimeout(t); a.removeAttribute('src'); try { a.load(); } catch (e) { /* ignora */ } res(v); };
+    const t = setTimeout(() => done(0), ms || 5000);
+    a.onloadedmetadata = () => done(isFinite(a.duration) ? a.duration : 0);
+    a.onerror = () => done(0);
+    a.src = N.fileUrl(path);
+  });
+}
+function toSec(v) {
+  const str = String(v).trim().replace(',', '.');
+  if (/^\d+:\d+(:\d+)?(\.\d+)?$/.test(str)) return str.split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
+  if (!/^-?\d+(\.\d+)?$/.test(str)) return null;
+  return parseFloat(str);
+}
+const PK = {
+  start: /^(start|begin|in|time|at|from|inicio|início|tempo|t0|start_?time|timestamp|start_?ms|start_?sec)$/i,
+  end: /^(end|stop|out|to|fim|t1|end_?time|end_?ms|end_?sec)$/i,
+  dur: /^(dur|duration|length|duracao|duração)$/i,
+  text: /^(text|caption|line|subtitle|subtitles|legenda|fala|dialog|dialogue|content|string|original|caption_?text)$/i,
+  char: /^(char|character|speaker|name|personagem|actor|who|character_?name)$/i,
+};
+/** Lê o .txt de uma fala. O formato exato não é conhecido, então aceita JSON, "chave=valor" / "chave: valor" ou texto puro. */
+function parseDubText(raw) {
+  const r = { start: null, end: null, dur: null, text: '', char: '' };
+  raw = String(raw || '').replace(/^﻿/, '').trim();
+  let obj = null;
+  try { obj = JSON.parse(raw); } catch (e) { /* não é JSON */ }
+  const put = (k, v) => {
+    if (v == null || typeof v === 'object') return false;
+    for (const f of ['start', 'end', 'dur']) if (PK[f].test(k)) { const n = toSec(v); if (n != null && r[f] == null) r[f] = n; return true; }
+    if (PK.text.test(k)) { if (!r.text) r.text = String(v).trim(); return true; }
+    if (PK.char.test(k)) { if (!r.char) r.char = String(v).trim(); return true; }
+    return false;
+  };
+  if (obj && typeof obj === 'object') {
+    Object.keys(obj).forEach((k) => put(k, obj[k]));
+    if (!r.text && typeof obj === 'string') r.text = obj;
+    return r;
+  }
+  if (typeof obj === 'string') { r.text = obj; return r; }
+  const free = [];
+  raw.split(/\r?\n/).forEach((line) => {
+    const t = line.trim();
+    if (!t || /^[;#\[]/.test(t)) return;
+    const m = /^([^=:]{1,24}?)\s*[=:]\s*(.*)$/.exec(t);
+    if (m && put(m[1].trim(), m[2].trim())) return;
+    free.push(t);
+  });
+  if (free.length && /^[\d:.,]+$/.test(free[0]) && toSec(free[0]) != null && r.start == null) r.start = toSec(free.shift());
+  if (!r.text) r.text = free.join(' ');
+  return r;
+}
+function stemTime(stem) {   // ex.: "07_Clip_44-048" -> 44.048
+  const m = /[_\s](\d+)[-.](\d{2,3})$/.exec(stem);
+  return m ? parseFloat(m[1] + '.' + m[2]) : null;
+}
+const AUDIO_PACK = /\.(wav|ogg|oga|mp3|m4a|aac|flac|opus)$/i;
+
+async function packLines(files) {
+  const map = new Map();
+  files.forEach((f) => {
+    if (/^(dub_video|_backing_track|_pack_|_icon)/i.test(f.name)) return;
+    const m = /^(.+)\.([a-z0-9]+)$/i.exec(f.name);
+    if (!m) return;
+    const key = f.rel.replace(/\.[^./]+$/, '');
+    const e = map.get(key) || { stem: m[1] };
+    if (AUDIO_PACK.test(f.name)) e.audio = f;
+    else if (/^txt$/i.test(m[2])) e.txt = f;
+    else if (/^(jpe?g|png|webp)$/i.test(m[2])) e.img = f;
+    map.set(key, e);
+  });
+  return [...map.values()].filter((e) => e.audio).sort((a, b) => a.stem.localeCompare(b.stem, 'pt', { numeric: true }));
+}
+
+async function createDubFromPack(m) {
+  showBusy('Lendo o pacote…');
+  try {
+    const files = await modFiles(m);
+    const vid = files.find((f) => /^dub_video\./i.test(f.name)) || files.find((f) => VIDEO_RE.test(f.name));
+    const back = files.find((f) => /^_backing_track\./i.test(f.name));
+    if (!vid) { hideBusy(); await showError('Não achei o vídeo da dublagem', 'Esperava um arquivo dub_video.mp4 dentro do pacote. Use “Ver estrutura” para conferir.'); return; }
+    const lines = await packLines(files);
+    if (!lines.length) { hideBusy(); await showError('Não achei as falas', 'Não encontrei arquivos de áudio das falas no pacote. Use “Ver estrutura”.'); return; }
+    const backDur = back ? await audioDur(back.path, 8000) : 0;
+    const items = [];
+    for (let i = 0; i < lines.length; i += 6) {
+      $('#busy-msg').textContent = 'Lendo as falas… ' + Math.min(i + 6, lines.length) + '/' + lines.length;
+      const part = await Promise.all(lines.slice(i, i + 6).map(async (e) => {
+        let info = { start: null, end: null, dur: null, text: '', char: '' };
+        if (e.txt) { try { info = parseDubText(await readText(e.txt.path)); } catch (err) { /* ignora */ } }
+        const d = await audioDur(e.audio.path);
+        return { e, info, d };
+      }));
+      items.push(...part);
+    }
+    // tempos: do .txt; senão do nome do arquivo; senão em sequência
+    let found = 0;
+    items.forEach((it) => {
+      if (it.info.start != null) { found++; return; }
+      const st = stemTime(it.e.stem);
+      if (st != null) { it.info.start = st; found++; }
+    });
+    const maxStart = Math.max(0, ...items.map((it) => it.info.start || 0));
+    const ms = backDur > 0 && maxStart > backDur * 1.5 + 5;
+    let cursor = 0;
+    const segs = items.map((it, i) => {
+      let start = it.info.start;
+      let end = it.info.end;
+      if (start != null && ms) start /= 1000;
+      if (end != null && ms) end /= 1000;
+      if (start == null) start = cursor;
+      const d = it.d || (it.info.dur != null ? (ms ? it.info.dur / 1000 : it.info.dur) : 2.5);
+      if (end == null || end <= start) end = start + d;
+      cursor = end + 0.2;
+      let char = it.info.char;
+      if (!char) { const cm = /^\d+[_\-\s]+(.+)$/.exec(it.e.stem); if (cm) char = cm[1].replace(/_/g, ' ').replace(/\s*\d+[-.]\d{2,3}$/, ''); }
+      let text = it.info.text;
+      if (!text) text = '';
+      return { id: i + 1, start, end, text, char, orig: { path: it.e.audio.path }, take: null };
+    }).sort((a, b) => a.start - b.start);
+    hideBusy();
+    if (!found) {
+      const ok = await askConfirm('Não achei os tempos das falas', 'Não consegui ler o momento de início de cada fala nos arquivos do pacote, então vou colocar as falas em sequência. Você pode ajustar o início de cada uma no editor. (Use “Ver estrutura” e me mande o print para eu aprender o formato.)', 'Criar assim mesmo');
+      if (!ok) return;
+    }
+    const now = Date.now();
+    const p = {
+      id: uid(), name: m.name, created: now, updated: now, mode: 'dub', format: 'horizontal',
+      bg: { path: vid.path, name: vid.name },
+      voice: back ? { path: back.path, name: back.name } : { path: vid.path, name: vid.name },
+      segs, duration: backDur || 0, pos: 0, thumb: null, opts: newOpts('dub'),
+    };
+    p.opts.showEditor = true;
+    saveProject(p);
+    renderVideos();
+    stack.pop();             // sai da tela do mod
+    openEditor(p);
+    toast(segs.length + ' falas carregadas' + (found ? '' : ' (sem tempos)') + '.');
+  } catch (e) {
+    hideBusy();
+    await showError('Não consegui montar a dublagem', e);
+  }
+}
+
+async function inspectMod(m) {
+  showBusy('Lendo o pacote…');
+  let out = '';
+  try {
+    const files = await modFiles(m);
+    const ext = {};
+    files.forEach((f) => { const x = (/\.([^.]+)$/.exec(f.name) || [, '?'])[1].toLowerCase(); ext[x] = (ext[x] || 0) + 1; });
+    out += 'Arquivos: ' + files.length + ' (' + Object.keys(ext).map((k) => k + ' ' + ext[k]).join(', ') + ')\n';
+    out += 'Primeiros nomes:\n' + files.slice(0, 10).map((f) => ' • ' + f.rel + ' (' + fmtSize(f.size) + ')').join('\n') + '\n';
+    const ini = files.find((f) => /_pack_info\.ini$/i.test(f.name));
+    if (ini) out += '\n_pack_info.ini:\n' + (await readText(ini.path)).slice(0, 900) + '\n';
+    const txts = files.filter((f) => /\.txt$/i.test(f.name)).sort((a, b) => a.rel.localeCompare(b.rel, 'pt', { numeric: true }));
+    for (const f of txts.slice(0, 2)) {
+      const raw = await readText(f.path);
+      out += '\n' + f.name + ':\n' + raw.slice(0, 500) + '\n→ entendi: ' + JSON.stringify(parseDubText(raw)) + '\n';
+    }
+    if (!txts.length) out += '\n(nenhum arquivo .txt)\n';
+  } catch (e) { out += '\nErro: ' + (e.message || e); }
+  hideBusy();
+  await dialog({ title: 'Estrutura: ' + m.name, text: out, buttons: [{ label: 'Fechar', value: true, kind: 'primary' }] });
+}
+
 function togglePreview(f, btn, isAudio) {
   if (previewPath === f.path && !preview.paused) { stopPreview(); return; }
   stopPreview();
@@ -857,9 +1055,12 @@ function togglePreview(f, btn, isAudio) {
    Novo projeto
    ===================================================================== */
 let draft = null;
+function newOpts(mode) {
+  return { burn: S.burn, showEditor: S.showEditor, volBg: mode === 'dub' ? 0 : S.volBg, volVoice: S.volVoice, volTake: 1 };
+}
 
 function startDraft(pre) {
-  draft = Object.assign({ name: '', format: S.format, bg: null, voice: null }, pre || {});
+  draft = Object.assign({ name: '', format: S.format, mode: 'voice', bg: null, voice: null }, pre || {});
   renderSetup();
   push('setup');
 }
@@ -871,9 +1072,14 @@ function renderSetup() {
     $(textId).textContent = f ? '✔ ' + f.name : icon;
   };
   set('#su-bg', '#su-bg-text', draft.bg, 'Escolher vídeo');
-  set('#su-voice', '#su-voice-text', draft.voice, 'Escolher áudio');
+  const dubMode = draft.mode === 'dub';
+  set('#su-voice', '#su-voice-text', draft.voice, dubMode ? 'Escolher instrumental' : 'Escolher áudio');
+  $('#su-voice-title').textContent = dubMode ? '2. Instrumental (música sem a voz)' : '2. Áudio da voz';
+  $('#su-voice-hint').textContent = dubMode ? 'A trilha de fundo que toca enquanto você dubla. Se não tiver, use o próprio vídeo.' : 'A gravação da voz que vai falar no vídeo.';
+  $('#su-mode-hint').textContent = dubMode ? 'Você grava a voz de cada parte direto no app, em cima do instrumental.' : 'Você já tem o áudio da voz pronto.';
+  $$('#su-mode .chip').forEach((c) => c.classList.toggle('on', c.dataset.mode === draft.mode));
   $$('#su-format .chip').forEach((c) => c.classList.toggle('on', c.dataset.format === draft.format));
-  $('#su-create').disabled = !(draft.bg && draft.voice);
+  $('#su-create').disabled = !(draft.bg && (draft.voice || dubMode));
 }
 $('#su-name').addEventListener('input', (e) => { draft.name = e.target.value; });
 $('#fab-new').addEventListener('click', () => startDraft());
@@ -885,18 +1091,20 @@ $('#su-voice').addEventListener('click', async () => {
   const r = await Browser.open({ title: 'Áudio da voz', types: ['audio', 'video'] });
   if (r && r[0]) { draft.voice = r[0]; renderSetup(); }
 });
+$$('#su-mode .chip').forEach((c) => c.addEventListener('click', () => { draft.mode = c.dataset.mode; renderSetup(); }));
 $$('#su-format .chip').forEach((c) => c.addEventListener('click', () => { draft.format = c.dataset.format; renderSetup(); }));
 $('#su-create').addEventListener('click', () => {
-  if (!draft || !draft.bg || !draft.voice) return;
+  if (!draft || !draft.bg || !(draft.voice || draft.mode === 'dub')) return;
   const now = Date.now();
   const p = {
     id: uid(),
     name: (draft.name || '').trim() || 'Projeto ' + (projIds().length + 1),
     created: now, updated: now,
     format: draft.format,
-    bg: draft.bg, voice: draft.voice,
+    mode: draft.mode,
+    bg: draft.bg, voice: draft.voice || draft.bg,
     segs: [], duration: 0, pos: 0, thumb: null,
-    opts: { burn: S.burn, showEditor: S.showEditor, volBg: S.volBg, volVoice: S.volVoice },
+    opts: newOpts(draft.mode),
   };
   saveProject(p);
   draft = null;
@@ -921,17 +1129,17 @@ function setCanvasSize(w, h) { canvas.width = w; canvas.height = h; }
 function editorDims() { return DIMS.media[cur ? cur.format : 'vertical']; }
 
 /* ---------- áudio: fundo + voz ---------- */
-let AC = null, gBg, gVoice, gMon, dest;
+let AC = null, gBg, gVoice, gTake, gMon, dest;
 function initAudio() {
   if (AC) { AC.resume(); return; }
   AC = new (window.AudioContext || window.webkitAudioContext)();
   const sBg = AC.createMediaElementSource(bg);
   const sVoice = AC.createMediaElementSource(voice);
-  gBg = AC.createGain(); gVoice = AC.createGain(); gMon = AC.createGain();
+  gBg = AC.createGain(); gVoice = AC.createGain(); gTake = AC.createGain(); gMon = AC.createGain();
   dest = AC.createMediaStreamDestination();
   sBg.connect(gBg); sVoice.connect(gVoice);
-  gBg.connect(dest); gVoice.connect(dest);
-  gBg.connect(gMon); gVoice.connect(gMon);
+  gBg.connect(dest); gVoice.connect(dest); gTake.connect(dest);
+  gBg.connect(gMon); gVoice.connect(gMon); gTake.connect(gMon);
   gMon.connect(AC.destination);
   applyVolumes();
   AC.resume();
@@ -940,6 +1148,7 @@ function applyVolumes() {
   if (!AC || !cur) return;
   gBg.gain.value = cur.opts.volBg;
   gVoice.gain.value = cur.opts.volVoice;
+  gTake.gain.value = cur.opts.volTake == null ? 1 : cur.opts.volTake;
 }
 
 /* ---------- salvar ---------- */
@@ -978,7 +1187,7 @@ function flush(withThumb) {
 function whenReady(el, ms) {
   return new Promise((res, rej) => {
     if (el.readyState >= 1) return res();
-    const timer = setTimeout(() => { cleanup(); rej(new Error('tempo esgotado')); }, ms || 12000);
+    const timer = setTimeout(() => { cleanup(); rej(new Error('tempo esgotado')); }, ms || 45000);
     const ok = () => { cleanup(); res(); };
     const bad = () => { cleanup(); rej(new Error('erro')); };
     const cleanup = () => { clearTimeout(timer); el.removeEventListener('loadedmetadata', ok); el.removeEventListener('error', bad); };
@@ -986,6 +1195,57 @@ function whenReady(el, ms) {
     el.addEventListener('error', bad);
     el.load();
   });
+}
+
+/** Lê só a "estrutura" de um .mp4 (onde está o moov, codec, resolução) para explicar por que não abre. */
+async function probeMp4(path) {
+  try {
+    const url = N.fileUrl(path);
+    const rd = async (a, b) => {
+      const r = await fetch(url, { headers: { Range: 'bytes=' + a + '-' + b } });
+      const ab = await r.arrayBuffer();
+      const m = /\/(\d+)$/.exec(r.headers.get('content-range') || '');
+      return { dv: new DataView(ab), u8: new Uint8Array(ab), total: m ? +m[1] : null };
+    };
+    const tag = (u8, i) => String.fromCharCode(u8[i], u8[i + 1], u8[i + 2], u8[i + 3]);
+    let pos = 0, total = null, moov = null;
+    const boxes = [];
+    for (let i = 0; i < 12; i++) {
+      const r = await rd(pos, pos + 15);
+      total = r.total || total;
+      if (r.u8.length < 8) break;
+      let size = r.dv.getUint32(0);
+      const type = tag(r.u8, 4);
+      if (size === 1 && r.u8.length >= 16) size = r.dv.getUint32(8) * 4294967296 + r.dv.getUint32(12);
+      if (size === 0) size = (total || 0) - pos;
+      if (size < 8) break;
+      boxes.push(type + '(' + fmtSize(size) + ')');
+      if (type === 'moov') moov = { pos, size };
+      pos += size;
+      if (total && pos >= total) break;
+    }
+    let info = 'caixas: ' + boxes.join(' ');
+    if (!moov) return info + ' · não achei o índice (moov): arquivo cortado ou formato que não é mp4.';
+    info += moov.pos > (total || 0) / 2 ? ' · índice no FIM do arquivo (pode demorar a abrir)' : ' · índice no começo';
+    const m = await rd(moov.pos, moov.pos + Math.min(moov.size, 3000000) - 1);
+    const found = [];
+    ['avc1', 'hvc1', 'hev1', 'av01', 'vp09', 'mp4a', 'Opus', 'ac-3'].forEach((c) => {
+      for (let i = 4; i < m.u8.length - 40; i++) {
+        if (tag(m.u8, i) === c) {
+          let extra = '';
+          if (c === 'avc1' || c === 'hvc1' || c === 'hev1' || c === 'av01' || c === 'vp09') {
+            extra = ' ' + m.dv.getUint16(i + 28) + 'x' + m.dv.getUint16(i + 30);
+            if (c === 'avc1') for (let j = i; j < Math.min(i + 120, m.u8.length - 8); j++) if (tag(m.u8, j) === 'avcC') { extra += ' perfil ' + m.u8[j + 5] + ' nível ' + (m.u8[j + 7] / 10).toFixed(1); break; }
+          }
+          found.push(c + extra);
+          break;
+        }
+      }
+    });
+    info += ' · ' + (found.join(', ') || 'codec não identificado');
+    if (found.some((f) => /^(hvc1|hev1|av01|vp09)/.test(f))) info += ' · este codec pode não ser suportado pelo aparelho';
+    return info + ' · player diz: mp4=' + (bg.canPlayType('video/mp4') || 'não');
+  } catch (e) { return 'não consegui ler a estrutura do arquivo (' + (e.message || e) + ')'; }
 }
 
 /** Texto curto explicando por que um vídeo/áudio não abriu (ajuda a achar o problema). */
@@ -1005,10 +1265,11 @@ async function loadMedia() {
   warn.hidden = true;
   bg.src = N.fileUrl(cur.bg.path);
   voice.src = N.fileUrl(cur.voice.path);
+  $('#busy-msg').textContent = 'Abrindo projeto… (pode demorar em arquivos grandes)';
   const rs = await Promise.allSettled([whenReady(bg), whenReady(voice)]);
   const miss = [];
   const diag = [];
-  if (rs[0].status === 'rejected') { miss.push('o vídeo de fundo'); diag.push('Fundo: ' + await mediaDiag(bg, cur.bg.path)); }
+  if (rs[0].status === 'rejected') { miss.push('o vídeo de fundo'); diag.push('Fundo: ' + await mediaDiag(bg, cur.bg.path)); diag.push(await probeMp4(cur.bg.path)); }
   if (rs[1].status === 'rejected') { miss.push('o áudio da voz'); diag.push('Voz: ' + await mediaDiag(voice, cur.voice.path)); }
   if (miss.length) {
     warn.hidden = false;
@@ -1018,17 +1279,21 @@ async function loadMedia() {
   initAudio();
   applyVolumes();
   $('#seek').max = dur() || 1;
+  preloadBufs();
 }
 
 async function openEditor(p) {
   cur = p;
-  if (!cur.opts) cur.opts = { burn: S.burn, showEditor: S.showEditor, volBg: S.volBg, volVoice: S.volVoice };
+  if (!cur.opts) cur.opts = newOpts(cur.mode);
+  if (cur.opts.volTake == null) cur.opts.volTake = 1;
   push('editor');
   $('#ed-name').value = cur.name;
   $('#opt-editor').checked = cur.opts.showEditor;
   $('#opt-burn').checked = cur.opts.burn;
   $('#vol-bg').value = cur.opts.volBg;
   $('#vol-voice').value = cur.opts.volVoice;
+  $('#vol-take').value = cur.opts.volTake;
+  dubSel = null;
   $$('#ed-format .chip').forEach((c) => c.classList.toggle('on', c.dataset.format === cur.format));
   const [w, h] = editorDims();
   setCanvasSize(w, h);
@@ -1041,7 +1306,9 @@ async function openEditor(p) {
 }
 
 function leaveEditor() {
+  if (dubState.recording) cancelRecording();
   pause();
+  stopOrig();
   sync.active = false;
   $('#sync-live').hidden = true;
   $('#sync-box').hidden = true;
@@ -1067,6 +1334,7 @@ function bgTimeFor(t) {
 }
 function seekTo(t) {
   t = clamp(t, 0, dur());
+  stopDub();
   voice.currentTime = t;
   try { bg.currentTime = bgTimeFor(t); } catch (e) { /* ignora */ }
   updateUI();
@@ -1077,6 +1345,7 @@ async function play() {
   initAudio();
   if (voice.currentTime >= dur() - 0.05) seekTo(0);
   try { bg.currentTime = bgTimeFor(voice.currentTime); } catch (e) { /* ignora */ }
+  await preloadBufs();
   try { await Promise.all([voice.play(), bg.play()]); } catch (e) { return; }
   playing = true;
   $('#btn-play').textContent = '⏸';
@@ -1084,6 +1353,8 @@ async function play() {
 }
 function pause() {
   voice.pause(); bg.pause();
+  stopDub();
+  dubState.stopAt = 0;
   playing = false;
   $('#btn-play').textContent = '▶';
   cancelAnimationFrame(raf);
@@ -1097,6 +1368,8 @@ function loop() {
     if (Math.abs(bg.currentTime - want) > 0.4 && want > 0.3 && bg.duration - want > 0.6) {
       try { bg.currentTime = want; } catch (e) { /* ignora */ }
     }
+    dubTick(voice.currentTime);
+    if (dubState.stopAt && voice.currentTime >= dubState.stopAt) { pause(); return; }
     updateUI(); draw();
     raf = requestAnimationFrame(tick);
   };
@@ -1115,10 +1388,275 @@ function updateUI() {
   $('#time').textContent = fmt(t);
   if (document.activeElement !== $('#seek')) $('#seek').value = t;
   if (!cur) return;
+  if (playing && !dubState.recording && !dubState.stopAt) {
+    const sg = cur.segs.find((x) => t >= x.start && t < x.end);
+    if (sg && sg.id !== dubSel) { dubSel = sg.id; renderDub(); }
+  }
   $$('.seg').forEach((el) => {
     const s = cur.segs.find((x) => x.id === +el.dataset.id);
     el.classList.toggle('now', !!s && t >= s.start && t < s.end);
   });
+}
+
+
+/* =====================================================================
+   Dublagem: gravações por parte, tocadas por cima do instrumental
+   ===================================================================== */
+const dubState = { sources: new Map(), bufs: new Map(), loading: new Map(), recSeg: null, recording: false, stopAt: 0, cancel: false, stop: false };
+let dubSel = null;
+
+/** qual áudio toca nessa parte: a gravação do usuário, senão o original do pacote */
+function audioFor(sg) {
+  if (dubState.recSeg === sg) return S.guide && sg.orig ? sg.orig : null;
+  return sg.take || sg.orig || null;
+}
+function audioUrl(a) { return a.url || N.fileUrl(a.path); }
+function getBuf(a) {
+  const key = a.url || a.path;
+  if (dubState.bufs.has(key)) return Promise.resolve(dubState.bufs.get(key));
+  if (dubState.loading.has(key)) return dubState.loading.get(key);
+  if (!AC) return Promise.reject(new Error('sem áudio'));
+  const pr = (async () => {
+    const r = await fetch(audioUrl(a));
+    if (!r.ok && r.status !== 206) throw new Error('arquivo ' + r.status);
+    const buf = await AC.decodeAudioData(await r.arrayBuffer());
+    dubState.bufs.set(key, buf);
+    return buf;
+  })();
+  dubState.loading.set(key, pr);
+  pr.catch(() => {}).then(() => dubState.loading.delete(key));
+  return pr;
+}
+function preloadBufs() {
+  if (!cur || !AC) return Promise.resolve();
+  const jobs = [];
+  cur.segs.forEach((sg) => { const a = audioFor(sg); if (a) jobs.push(getBuf(a).catch(() => null)); });
+  return Promise.all(jobs);
+}
+function stopDub() {
+  dubState.sources.forEach((o) => { try { o.stop(); } catch (e) { /* ignora */ } try { o.disconnect(); } catch (e) { /* ignora */ } });
+  dubState.sources.clear();
+  if (AC && gVoice && cur) { try { gVoice.gain.cancelScheduledValues(0); gVoice.gain.value = cur.opts.volVoice; } catch (e) { /* ignora */ } }
+}
+/** agenda (um pouco antes) as falas que vão tocar; chamado a cada quadro durante reprodução/exportação */
+function dubTick(t) {
+  if (!cur || !AC || !gTake) return;
+  const now = AC.currentTime;
+  const gate = cur.mode !== 'dub';   // numa voz pronta, a gravação substitui a voz naquele trecho
+  let muted = false;
+  for (const sg of cur.segs) {
+    const a = audioFor(sg);
+    if (!a) continue;
+    const key = a.url || a.path;
+    const buf = dubState.bufs.get(key);
+    if (!buf) { getBuf(a).catch(() => {}); continue; }
+    const tl = sg.start + (a.offset || 0);
+    const endTl = tl + buf.duration;
+    if (gate && sg.take && a === sg.take && t >= sg.start - 0.02 && t < Math.max(sg.end, endTl)) muted = true;
+    const id = sg.id + ':' + key + ':' + (a.offset || 0);
+    if (dubState.sources.has(id)) continue;
+    if (endTl <= t || tl - t > 1.5) continue;
+    const src = AC.createBufferSource();
+    src.buffer = buf;
+    src.connect(gTake);
+    if (tl >= t) src.start(now + (tl - t), 0); else src.start(now, t - tl);
+    dubState.sources.set(id, src);
+  }
+  if (gate) gVoice.gain.setTargetAtTime(muted ? 0 : cur.opts.volVoice, now, 0.01);
+}
+
+/* ---------- painel ---------- */
+function selSeg() { return cur ? cur.segs.find((x) => x.id === dubSel) || null : null; }
+function renderDub() {
+  if (!cur) return;
+  const segs = cur.segs;
+  if (!selSeg() && segs.length) dubSel = segs[0].id;
+  const sg = selSeg();
+  const i = sg ? segs.indexOf(sg) : -1;
+  $('#dub-count').textContent = sg ? 'Parte ' + (i + 1) + ' de ' + segs.length + (sg.char ? ' · ' + sg.char : '') : '—';
+  $('#dub-text').textContent = sg ? (sg.text.trim() || '(sem texto)') : 'Crie uma parte em “Legendas” abaixo.';
+  const st = $('#dub-status');
+  if (!sg) st.textContent = '';
+  else if (sg.take) st.textContent = '✔ gravada (' + sg.take.dur.toFixed(1) + ' s)';
+  else st.textContent = sg.orig ? 'sem gravação — toca o original' : 'sem gravação';
+  $('#dub-rec').textContent = sg && sg.take ? '⏺ Regravar' : '⏺ Gravar';
+  $('#dub-rec').disabled = !sg;
+  $('#dub-play').hidden = !(sg && sg.take);
+  $('#dub-del').hidden = !(sg && sg.take);
+  $('#dub-orig').hidden = !(sg && sg.orig);
+  $('#dub-nudge').hidden = !(sg && sg.take);
+  if (sg && sg.take) $('#dub-off').textContent = Math.round((sg.take.offset || 0) * 1000) + ' ms';
+  $('#opt-guide').checked = !!S.guide;
+  $('#row-vol-take').style.display = segs.some((x) => x.take || x.orig) ? 'flex' : 'none';
+  $('#lbl-vol-voice').textContent = cur.mode === 'dub' ? 'Volume do instrumental' : 'Volume da voz';
+  $('#btn-swap-voice').textContent = cur.mode === 'dub' ? '🎧 Trocar instrumental' : '🎧 Trocar voz';
+  $$('.seg').forEach((el) => {
+    const x = segs.find((q) => q.id === +el.dataset.id);
+    const tk = el.querySelector('.tk');
+    if (tk && x) tk.textContent = x.take ? '🎤 gravada' : '';
+    el.classList.toggle('sel', !!x && x.id === dubSel);
+  });
+}
+function dubGo(delta) {
+  if (!cur || !cur.segs.length) return;
+  const segs = cur.segs;
+  const i = Math.max(0, segs.findIndex((x) => x.id === dubSel));
+  const j = clamp(i + delta, 0, segs.length - 1);
+  dubSel = segs[j].id;
+  pause(); stopOrig();
+  seekTo(Math.max(0, segs[j].start - 0.2));
+  renderDub();
+}
+$('#dub-prev').addEventListener('click', () => dubGo(-1));
+$('#dub-next').addEventListener('click', () => dubGo(1));
+$('#opt-guide').addEventListener('change', (e) => { S.guide = e.target.checked; saveSettings(); });
+$('#vol-take').addEventListener('input', (e) => { if (!cur) return; cur.opts.volTake = parseFloat(e.target.value); applyVolumes(); touch(); });
+
+const origEl = $('#preview');
+function stopOrig() { try { origEl.pause(); } catch (e) { /* ignora */ } }
+$('#dub-orig').addEventListener('click', () => {
+  const sg = selSeg();
+  if (!sg || !sg.orig) return;
+  pause();
+  seekTo(Math.max(0, sg.start));
+  stopPreview();
+  origEl.src = audioUrl(sg.orig);
+  origEl.play().catch(() => toast('Não consegui tocar o original.'));
+});
+$('#dub-play').addEventListener('click', async () => {
+  const sg = selSeg();
+  if (!sg || !sg.take) return;
+  stopOrig();
+  pause();
+  initAudio();
+  seekTo(Math.max(0, sg.start - 0.5));
+  dubState.stopAt = Math.max(sg.end, sg.start + (sg.take.offset || 0) + sg.take.dur) + 0.3;
+  await play();
+});
+$('#dub-del').addEventListener('click', async () => {
+  const sg = selSeg();
+  if (!sg || !sg.take) return;
+  if (!(await askConfirm('Apagar a gravação desta parte?', 'Volta a tocar o original (se houver).', 'Apagar'))) return;
+  const old = sg.take;
+  sg.take = null;
+  if (old.path && N.MediaLib) { try { await N.MediaLib.remove({ path: old.path }); } catch (e) { /* ignora */ } }
+  stopDub(); touch(); renderDub();
+});
+function nudge(ms) {
+  const sg = selSeg();
+  if (!sg || !sg.take) return;
+  sg.take.offset = (sg.take.offset || 0) + ms / 1000;
+  stopDub(); touch(); renderDub();
+}
+$('#dub-early').addEventListener('click', () => nudge(-50));
+$('#dub-late').addEventListener('click', () => nudge(50));
+
+/* ---------- gravar ---------- */
+const recUI = { box: $('#rec-ov'), big: $('#rec-big'), bar: $('#rec-bar') };
+function cancelRecording() { dubState.cancel = true; dubState.stop = true; }
+$('#rec-stop').addEventListener('click', () => { dubState.stop = true; });
+$('#rec-cancel').addEventListener('click', () => cancelRecording());
+$('#dub-rec').addEventListener('click', () => { const sg = selSeg(); if (sg) recordTake(sg); });
+
+async function writeTake(blob, name) {
+  const CH = 768 * 1024;
+  let off = 0, first = true, path = '';
+  while (off < blob.size) {
+    const r = await N.MediaLib.appendChunk({ name, data: await blobToBase64(blob.slice(off, off + CH)), reset: first, dir: 'files', subdir: 'takes/' + cur.id });
+    path = r.path; first = false; off += CH;
+  }
+  return path;
+}
+
+async function recordTake(sg) {
+  if (!cur || dubState.recording || X.running) return;
+  if (!dur()) { toast('Espere o vídeo e o áudio carregarem.'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+    await showError('Este aparelho não consegue gravar áudio aqui', 'O navegador do app não liberou o microfone.');
+    return;
+  }
+  if (!Store.get('headTip', false)) {
+    await dialog({ title: 'Use fones de ouvido 🎧', text: 'Para o microfone não gravar o som do instrumental, grave com fones. Se a gravação ficar adiantada ou atrasada, ajuste em Ajustes → Dublagem, ou use os botões ±50 ms depois de gravar.', buttons: [{ label: 'Entendi', value: true, kind: 'primary' }] });
+    Store.set('headTip', true);
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) {
+    await showError('Sem acesso ao microfone', 'Permita o microfone para o app (Configurações do Android → Apps → Voz e Legenda → Permissões). ' + (e && e.message ? e.message : ''));
+    return;
+  }
+  pause(); stopOrig(); stopPreview();
+  initAudio();
+  dubState.recording = true; dubState.recSeg = sg; dubState.cancel = false; dubState.stop = false;
+  const tracks = stream.getTracks();
+  const releaseMic = () => tracks.forEach((t) => { try { t.stop(); } catch (e) { /* ignora */ } });
+  $('#rec-char').textContent = sg.char || '';
+  $('#rec-text').textContent = sg.text.trim();
+  recUI.bar.style.width = '0%';
+  recUI.big.className = 'rec-big';
+  recUI.box.hidden = false;
+  try {
+    const pre = Math.min(1, sg.start);
+    const tStart = sg.start - pre;
+    seekTo(tStart);
+    await preloadBufs();
+    for (let n = 3; n >= 1 && !dubState.cancel; n--) { recUI.big.textContent = String(n); await sleep(800); }
+    if (dubState.cancel) return;
+
+    const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus'].find((m) => MediaRecorder.isTypeSupported(m)) || '';
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((r) => { rec.onstop = r; });
+    const pp = play();
+    rec.start(250);
+    recUI.big.textContent = '● Gravando';
+    recUI.big.className = 'rec-big live';
+    await pp;
+    const endAt = sg.end + 0.35;
+    await new Promise((resolve) => {
+      const iv = setInterval(() => {
+        const t = voice.currentTime || 0;
+        recUI.bar.style.width = Math.round(clamp((t - tStart) / Math.max(0.1, endAt - tStart), 0, 1) * 100) + '%';
+        if (dubState.stop || voice.ended || t >= endAt || !playing) { clearInterval(iv); resolve(); }
+      }, 40);
+    });
+    const tEnd = voice.currentTime || 0;
+    try { rec.stop(); } catch (e) { /* ignora */ }
+    pause();
+    await stopped;
+    releaseMic();
+    if (dubState.cancel) return;
+    const type = rec.mimeType || mime || 'audio/webm';
+    const blob = new Blob(chunks, { type });
+    if (blob.size < 500) { toast('Não gravou nada. Tente de novo.'); return; }
+    const ext = /mp4|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : 'webm';
+    const name = 'take_' + sg.id + '_' + Date.now().toString(36) + '.' + ext;
+    const lat = (S.micLatency || 0) / 1000;
+    const take = { offset: tStart - sg.start - lat, dur: Math.max(0.1, tEnd - tStart) };
+    if (N.isNative && N.MediaLib) take.path = await writeTake(blob, name);
+    else { take.url = URL.createObjectURL(blob); take.path = take.url; }
+    try {
+      const buf = await AC.decodeAudioData(await blob.arrayBuffer());
+      take.dur = buf.duration;
+      dubState.bufs.set(take.url || take.path, buf);
+    } catch (e) { /* mantém a duração estimada */ }
+    const old = sg.take;
+    sg.take = take;
+    if (old && old.path && N.MediaLib && old.path !== take.path) { try { await N.MediaLib.remove({ path: old.path }); } catch (e) { /* ignora */ } }
+    touch(); renderSegs(); renderDub();
+    toast('Gravado! Toque em “Minha voz” para ouvir.');
+  } catch (e) {
+    console.error(e);
+    await showError('Falha ao gravar', e);
+  } finally {
+    releaseMic();
+    recUI.box.hidden = true;
+    dubState.recording = false; dubState.recSeg = null;
+    pause();
+    if (cur) seekTo(Math.max(0, sg.start - 0.2));
+  }
 }
 
 /* ---------- desenho ---------- */
@@ -1204,6 +1742,7 @@ function renderSegs() {
       '<div><label>Início (s)</label><input type="number" step="0.1" min="0" data-k="start"></div>' +
       '<div><label>Fim (s)</label><input type="number" step="0.1" min="0" data-k="end"></div>' +
       '<button class="mini" data-act="go" title="Ir para o início">▶</button>' +
+      '<button class="mini" data-act="dub" title="Dublar esta parte">🎤</button>' +
       '<button class="mini" data-act="del" title="Apagar">🗑</button></div>' +
       '<textarea rows="2" placeholder="Texto da legenda"></textarea>';
     const ins = el.querySelectorAll('input');
@@ -1211,20 +1750,24 @@ function renderSegs() {
     ins[1].value = s.end.toFixed(1);
     const ta = el.querySelector('textarea');
     ta.value = s.text;
+    const tg = document.createElement('span'); tg.className = 'tk'; el.querySelector('.seg-times').after(tg);
     ins.forEach((inp) => inp.addEventListener('change', () => {
       const v = parseFloat(inp.value);
       if (isFinite(v)) s[inp.dataset.k] = clamp(v, 0, dur() || v);
       if (s.end <= s.start) s.end = Math.min(dur() || s.start + 0.5, s.start + 0.5);
       touch(); renderSegs();
     }));
-    ta.addEventListener('input', () => { s.text = ta.value; touch(); if (!playing) draw(); });
+    ta.addEventListener('input', () => { s.text = ta.value; touch(); if (!playing) draw(); if (s.id === dubSel) renderDub(); });
     el.querySelector('[data-act=go]').addEventListener('click', () => { pause(); seekTo(s.start); });
+    el.querySelector('[data-act=dub]').addEventListener('click', () => { dubSel = s.id; renderDub(); pause(); seekTo(Math.max(0, s.start - 0.2)); $('#dub-card').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
     el.querySelector('[data-act=del]').addEventListener('click', () => {
       cur.segs = cur.segs.filter((x) => x.id !== s.id);
+      if (s.take && s.take.path && N.MediaLib) N.MediaLib.remove({ path: s.take.path }).catch(() => {});
       touch(); renderSegs(); draw();
     });
     box.appendChild(el);
   });
+  renderDub();
   updateUI();
 }
 
@@ -1407,6 +1950,7 @@ async function exportVideo() {
     };
     const stopped = new Promise((r) => { rec.onstop = r; });
 
+    await preloadBufs();
     rec.start(1000);
     try { await Promise.all([voice.play(), bg.play()]); } catch (e) { rec.stop(); throw new Error('não consegui tocar a mídia'); }
     playing = true;
@@ -1415,6 +1959,7 @@ async function exportVideo() {
     await new Promise((resolve) => {
       const tick = () => {
         const t = voice.currentTime;
+        dubTick(t);
         draw();
         ovProgress((t / total) * 0.85, 'Gravando… ' + fmt(t) + ' / ' + fmt(total));
         if (X.cancel || voice.ended || t >= total - 0.03) return resolve();
@@ -1426,7 +1971,7 @@ async function exportVideo() {
     draw();
     await sleep(250);
     rec.stop();
-    voice.pause(); bg.pause(); playing = false;
+    voice.pause(); bg.pause(); stopDub(); playing = false;
     await stopped;
     await writeChain;
 

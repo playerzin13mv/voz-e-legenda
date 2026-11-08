@@ -8,6 +8,8 @@ PERMS = [
     ("android.permission.READ_MEDIA_AUDIO", ""),
     ("android.permission.READ_EXTERNAL_STORAGE", ' android:maxSdkVersion="32"'),
     ("android.permission.WRITE_EXTERNAL_STORAGE", ' android:maxSdkVersion="28"'),
+    ("android.permission.RECORD_AUDIO", ""),
+    ("android.permission.MODIFY_AUDIO_SETTINGS", ""),
 ]
 
 s = open(PATH, encoding="utf-8").read()
@@ -22,6 +24,6 @@ if lines:
 if "android:screenOrientation" not in s:
     s = re.sub(r"<activity\b", '<activity android:screenOrientation="portrait"', s, count=1)
 
-assert "READ_MEDIA_VIDEO" in s and 'screenOrientation="portrait"' in s, "patch do manifesto falhou"
+assert "RECORD_AUDIO" in s and "READ_MEDIA_VIDEO" in s and 'screenOrientation="portrait"' in s, "patch do manifesto falhou"
 open(PATH, "w", encoding="utf-8").write(s)
 print("AndroidManifest.xml ajustado")

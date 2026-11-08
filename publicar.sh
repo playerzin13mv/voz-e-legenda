@@ -19,7 +19,7 @@ git config user.email >/dev/null || git config user.email "$(gh api user -q .log
 [ -d .git ] || git init -b main
 git checkout -B main
 git add -A
-git commit -m "Voz e Legenda 2.2" || true
+git commit -m "Voz e Legenda 2.3" || true
 
 if git remote get-url origin >/dev/null 2>&1; then
   echo "Repositório já existe: atualizando..."

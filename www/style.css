@@ -69,7 +69,7 @@ textarea{resize:vertical}
 .seg-list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
 .seg{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px}
 .seg.now{border-color:var(--acc)}
-.seg-times{display:grid;grid-template-columns:1fr 1fr auto auto;gap:6px;margin-bottom:6px;align-items:center}
+.seg-times{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:6px;margin-bottom:6px;align-items:center}
 .seg-times label{font-size:11px;color:var(--mut);display:block}
 .seg .mini{border:0;background:var(--bg);color:var(--txt);border-radius:10px;font-size:18px;padding:10px 12px}
 
@@ -88,3 +88,6 @@ textarea{resize:vertical}
 .progress{height:10px;background:var(--bg);border-radius:10px;overflow:hidden;margin:12px 0}
 .progress div{height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2));transition:width .2s}
 [hidden]{display:none !important}
+
+.seg.sel{box-shadow:0 0 0 1px var(--acc2) inset}
+#dlg-text{white-space:pre-wrap;max-height:55vh;overflow:auto;user-select:text;-webkit-user-select:text;font-size:12px}

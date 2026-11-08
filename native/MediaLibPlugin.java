@@ -562,9 +562,20 @@ public class MediaLibPlugin extends Plugin {
             String name = sanitize(call.getString("name", "video.mp4"));
             String data = call.getString("data", "");
             boolean reset = call.getBoolean("reset", false);
-            File dir = new File(getContext().getCacheDir(), "exports");
+            String where = call.getString("dir", "cache");
+            String sub = call.getString("subdir", "");
+            File base = "files".equals(where) ? getContext().getFilesDir() : getContext().getCacheDir();
+            File dir;
+            if ("files".equals(where)) {
+                // gravações de dublagem: dentro de files/takes/...
+                String clean = sub.replace("..", "").replaceAll("^/+", "");
+                dir = new File(base, clean.length() > 0 ? clean : "takes");
+            } else {
+                dir = new File(base, "exports");
+            }
             dir.mkdirs();
             File f = new File(dir, name);
+            if (!inside(f)) { call.reject("caminho não permitido"); return; }
             byte[] bytes = Base64.decode(data, Base64.DEFAULT);
             FileOutputStream os = new FileOutputStream(f, !reset);
             try {

@@ -1,4 +1,4 @@
-# Voz e Legenda 2.2
+# Voz e Legenda 2.3
 
 App Android (vertical) que junta **vídeo de fundo + áudio da voz + legendas** e exporta em **.mp4**.
 
@@ -8,6 +8,8 @@ App Android (vertical) que junta **vídeo de fundo + áudio da voz + legendas** 
 - **Ajustes**: formato padrão, legendas (tamanho, posição, cor, caixa), qualidade (540p/720p/1080p), FPS, volumes, limpeza de espaço.
 - **Escolher arquivos dentro do app**: navegador com álbuns da galeria (Recentes, Todos, Download, Camera…), miniaturas, e “Outros locais…” para o seletor do Android.
 - **Editor**: legendas em partes (manual ou “colar texto e sincronizar”), legendas só no editor ou também no vídeo exportado, formato vertical/horizontal.
+- **Dublagem**: crie um projeto “Dublar” (vídeo + instrumental) ou toque em **🎤 Dublar este pacote** num mod de dublagem do Choicer Voicer. Para cada parte: ⏺ Gravar (contagem 3-2-1, fala por cima do instrumental, use fones), ▶ Minha voz, ▶ Original, regravar, ajuste de sincronia ±50 ms. Partes sem gravação tocam o original. A exportação mistura tudo.
+- **Mods → 🔍 Ver estrutura**: mostra os arquivos do pacote e o conteúdo dos .txt (útil se as falas vierem sem tempo).
 - **Exportar .mp4**: grava em disco aos poucos (não estoura a memória), salva em **Filmes/VozELegenda** na galeria ou compartilha.
 
 ## Gerar / atualizar o APK pelo Termux
